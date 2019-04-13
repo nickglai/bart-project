@@ -1,0 +1,326 @@
+---
+title: "Bart Ridership Data"
+author: "Nicholas Lai"
+output: html_document
+---
+
+![*Map of the BART system*](system-map.gif)
+
+#Background
+
+The **Bay Area Rapid Transit** is the public train system that services the San Francisco Metropolitan Area, primarily connecting the Eastern Bay Area to San Francisco and the Caltrain system that services the Peninsula. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(cache=TRUE)
+library(knitr)
+
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(plotly)
+
+library(RColorBrewer)
+library(rworldmap)
+library(ggthemes)
+library(gridExtra)
+library(geosphere)
+library(viridis)
+library(ggrepel)
+
+```
+
+```{r}
+bart_2016<-read.csv('input/bart-ridership/date-hour-soo-dest-2016.csv',sep=',',stringsAsFactors=F)
+
+bart_2016$Month <- month(bart_2016$DateTime)
+bart_2016$Day <- day(bart_2016$DateTime)
+
+departures_2016 <- data.frame(bart_2016 %>% group_by(Origin) %>% summarise(count=n(), sum = sum(Throughput)))
+
+arrivals_2016 <- data.frame(bart_2016 %>% group_by(Destination) %>% summarise(count=n(), sum = sum(Throughput)))
+```
+
+```{r}
+stations<-read.csv('input/bart-ridership/station_info.csv',sep=',',stringsAsFactors=F)
+stations$Longitude<-sapply(stations$Location, function(x) as.numeric(strsplit(x,',')[[1]][1]))
+stations$Latitude<-sapply(stations$Location, function(x) as.numeric(strsplit(x,',')[[1]][2]))
+stations$Elevation<-sapply(stations$Location, function(x) as.numeric(strsplit(x,',')[[1]][3]))
+stations$Name2<-sapply(stations$Name, function(x) trimws(strsplit(x,'\\(')[[1]][1]))
+```
+
+```{r}
+departures_2016_2<- data.frame(
+  left_join(
+    departures_2016 %>% rename(Abbreviation = Origin), 
+    stations %>% select(Longitude, Latitude, Name2, Abbreviation), by='Abbreviation'))
+
+departures_2016_2 <- departures_2016_2[-46,]
+```
+
+```{r}
+arrivals_2016_2 <- data.frame(
+  left_join(
+    arrivals_2016 %>% rename(Abbreviation = Destination), 
+    stations %>% select(Longitude, Latitude, Name2, Abbreviation), by='Abbreviation'))
+
+arrivals_2016_2 <- arrivals_2016_2[-46,]
+```
+
+#Location
+
+*"A good traveler has no fixed plans, and is not intent on arriving" - Lao Tsu*
+
+*"The only certain freedom's in departure" - Robert Frost*
+
+The Bay Area has been the honoree and victim of many stereotypes bestowed upon the region by its observers. But the trouble about these stereotypes (and perhaps stereotypes in general) is that they are rife with contradictions. At once, the denizens of the Bay are both laid back (wearing a t-shirt and jeans to work, speaking in delightfully casual slang) and runners of an unending rat race (commuting long hours, stressing over housing expenses, seeking competitive tech jobs). 
+
+So, which is it? Are we Lao Tsu's good travelers and Frost's free departers, or are we too intent on arriving? Do more people use BART to commute to work, or for recreation?
+
+```{r, warning=FALSE}
+# Extracting map...California
+counties<-map_data("county")
+ca_county <- subset(counties, region == "california")
+mCal<-ggplot() + 
+  geom_map(data = ca_county, map = ca_county,aes(x = long, y = lat, map_id = region, group = group),fill = "white", color = "#585858", size = 0.2) + 
+  theme_fivethirtyeight() +
+  coord_fixed(1.3)
+```
+
+First, let's observe the departure station data. This graph describes how many people got on a train from each station during 2016, and which stations they departed from. The larger and redder the station dot is, the more people departed from that station.
+
+```{r}
+mCal + geom_point(data=departures_2016_2, aes(x=Longitude, y=Latitude, size=sum,color=sum),alpha=.75) + 
+  xlim(-122.6,-121.8) + ylim(37.5,38.1) + 
+  scale_color_gradient2(name='',low = "#58D68D", mid = "#F4D03F", high = "#E74C3C") + theme_fivethirtyeight() + 
+  scale_radius(range=c(0,8)) + 
+  theme(axis.text=element_blank(), 
+        legend.position='right',
+        legend.direction='vertical') + 
+  labs(title='2016 BART Transit',
+       subtitle='Departure Counts by Station') + 
+  guides(size=F)
+```
+
+The most popular departure stations are in San Francisco, by large margins. Commuters seem to come from all over the Bay Area to work in SF, and go home back the way they came. Exact figures are on the table below.
+
+```{r}
+kable(arrange(departures_2016_2[,c(6, 3)], desc(sum) ), format.args = list(decimal.mark = '.', big.mark = ","), col.names = c('Station', 'Number of Departures'))
+
+```
+
+Take a look at the other side of the coin: arrival data.
+
+```{r}
+mCal + geom_point(data=arrivals_2016_2, aes(x=Longitude, y=Latitude, size=sum,color=sum),alpha=.75) + 
+  xlim(-122.6,-121.8) + ylim(37.5,38.1) + 
+  scale_color_gradient2(name='',low = "#58D68D", mid = "#F4D03F", high = "#E74C3C") + theme_fivethirtyeight() + 
+  scale_radius(range=c(0,8)) + 
+  theme(axis.text=element_blank(), 
+        legend.position='right',
+        legend.direction='vertical') + 
+  labs(title='2016 BART Transit',
+       subtitle='Arrival Counts by Station') + 
+  guides(size=F)
+```
+
+The map looks roughly similar to the departure data.
+
+```{r, include = FALSE}
+kable(arrange(arrivals_2016_2[,c(6, 3)], desc(sum) ), format.args = list(decimal.mark = '.', big.mark = ","), col.names = c('Station', 'Number of Arrivals'))
+```
+
+
+```{r, warning=FALSE, include = FALSE}
+arrivals_2016_2 %>% mutate(departures = departures_2016_2[,3])-> chi_table
+chi_table <- chi_table[,c(3, 7)]
+
+chisq.test(x=chi_table[,1], y=chi_table[,2])
+
+```
+
+```{r, include=FALSE}
+chi_table %>% mutate(ratios = sum/departures) ->chi_table
+mean(chi_table$ratios)
+
+ggplot(chi_table, aes(x=departures, y=sum)) +
+    geom_point() + geom_smooth(method=lm, se=FALSE, color = "grey") + theme_economist_white() + labs(title = 'Arrivals vs Departures', subtitle='All Stations', x = "Departures in 2016", y = "Arrivals in 2016")
+```
+
+By far, the most popular BART stations are in San Francisco. The total arrival and departure graphs illustrate this point quite clearly, but they don't tell us whether or not most BART passengers commute from San Francisco to their jobs elsewhere in the Bay Area or to San Francisco from their homes in the suburbs. 
+
+```{r}
+bart_2016$weekdays<-weekdays(as.Date(bart_2016$DateTime))
+bart_2016$week<-week(as.Date(bart_2016$DateTime))
+bart_2016$weekdays <- factor(bart_2016$weekdays, levels = rev(c("Monday", "Tuesday", "Wednesday", "Thursday","Friday", "Saturday", "Sunday")))
+bart_2016$ymd<-ymd(as.Date(bart_2016$DateTime))
+```
+
+```{r}
+left_join(bart_2016, stations %>% rename(Origin = Abbreviation), by=c('Origin')) %>% 
+dplyr::group_by(Name2, ymd) %>% dplyr::summarize(count=n(),sum= sum(Throughput)) -> weekly_data
+```
+
+```{r}
+bart_2016_pm<- filter(bart_2016, pm(as_datetime(DateTime)) == TRUE)
+left_join(bart_2016_pm, stations %>% rename(Origin = Abbreviation), by=c('Origin')) %>% 
+dplyr::group_by(Name2, ymd) %>% dplyr::summarize(count=n(),sum= sum(Throughput)) -> weekly_data_pm
+```
+
+```{r}
+bart_2016_pm <- group_by(weekly_data_pm, Name2)
+departures_2016_pm<- data.frame(
+  left_join(
+    bart_2016_pm,
+    stations %>% select(Longitude, Latitude, Name2, Abbreviation), by='Name2'))
+
+departures_2016_pm <- departures_2016_pm[-46,]
+```
+
+To determine which pattern is more prevalent, we can stratify the data by AM/PM, with the idea that AM departures are stations near which commuters live, and PM departures are stations near which commuters work. 
+
+```{r, warning=FALSE}
+mCal + geom_point(data=departures_2016_pm, aes(x=Longitude, y=Latitude, size=sum,color=sum),alpha=.75) + 
+  xlim(-122.6,-121.8) + ylim(37.5,38.1) + 
+  scale_color_gradient2(name='',low = "#58D68D", mid = "#F4D03F", high = "#E74C3C") + theme_fivethirtyeight() + 
+  scale_radius(range=c(0,8)) + 
+  theme(axis.text=element_blank(), 
+        legend.position='right',
+        legend.direction='vertical') + 
+  labs(title='2016 BART Transit',
+       subtitle='Departure Counts by Station (PM only)') + 
+  guides(size=F)
+```
+```{r}
+bart_2016_am<- filter(bart_2016, am(as_datetime(DateTime)) == TRUE)
+left_join(bart_2016_am, stations %>% rename(Origin = Abbreviation), by=c('Origin')) %>% 
+dplyr::group_by(Name2, ymd) %>% dplyr::summarize(count=n(),sum= sum(Throughput)) -> weekly_data_am
+```
+
+```{r}
+bart_2016_am <- group_by(weekly_data_am, Name2)
+departures_2016_am<- data.frame(
+  left_join(
+    bart_2016_am,
+    stations %>% select(Longitude, Latitude, Name2, Abbreviation), by='Name2'))
+
+departures_2016_am <- departures_2016_am[-46,]
+```
+
+```{r, warning=FALSE}
+mCal + geom_point(data=departures_2016_am, aes(x=Longitude, y=Latitude, size=sum,color=sum),alpha=.75) + 
+  xlim(-122.6,-121.8) + ylim(37.5,38.1) + 
+  scale_color_gradient2(name='',low = "#58D68D", mid = "#F4D03F", high = "#E74C3C") + theme_fivethirtyeight() + 
+  scale_radius(range=c(0,8)) + 
+  theme(axis.text=element_blank(), 
+        legend.position='right',
+        legend.direction='vertical') + 
+  labs(title='2016 BART Transit',
+       subtitle='Departure Counts by Station (AM only)') + 
+  guides(size=F)
+```
+
+From these two graphs, we observe that AM departures are centered around San Francisco but PM departures are more evenly distributed throughout the Bay Area. This is evidence that more commuters live in San Francisco and commute to their jobs around the Bay Area, which may surprise many. Despite the density of technology companies and other employers in San Francisco, most commuters that use the BART use it to go to employers across the Bay Area.
+
+A possible explanation for this phenomenon is BART stations in San Francisco being more accessible to larger numbers of people by walking distance. If BART stations aren't close enough to access easily, commuters may be inclined to take cars instead. 
+
+Although BART, as far as environmental impact, is preferable to putting thousands of cars on the road, it seems that BART is destined to be for the commuters. BART as of late has been pushing an initiative called "Bartable" that encourages riders to use BART for recreation instead of cars.  Godspeed to them - if the data is anything to go by, they have a lot of ground to cover to encourage people to use BART for anything other than commuting. 
+
+#Time
+
+Up until now, we have assumed that most riders of the BART are commuters. Now we will justify this claim by illustrating BART usage data in a time series.
+
+Below are four time series of San Francisco BART station departures in the month of August. We look at the month of August as it has no federal holidays.
+
+San Francisco is both a commuter and recreational hub, so these four downtown stations are of interest to us.
+
+
+```{r}
+ggplot(filter(weekly_data, Name2 == "Powell St."| Name2 == "Embarcadero" | Name2 == "Montgomery St." | Name2 == "Civic Center/UN Plaza", month(ymd) == 8), aes(x=ymd,y=sum,group=Name2)) + geom_line(aes(color=sum), size=.5) + scale_color_gradientn(name="",colors=rev(viridis::viridis(5))) + 
+theme_fivethirtyeight() + theme(axis.text = element_text(size=6))  + 
+labs(title = 'San Francisco Stations', subtitle='Count of daily departures in August') + guides(color=F) + facet_wrap(~Name2,ncol=5)
+```
+
+Since people work during the weekdays and have the weekends off, we see the ratio of commuters to recreational users differ between BART departures on the weekdays and the weekends. 
+
+The weekday peaks and weekend troughs in the data above clearly show that commuters make up an outsize proportion of BART users. 
+
+Below is a yearly graph of Powell St. Station departures, which shows that the weekly usage cycle is consistent throughout the year.
+
+
+```{r}
+ggplot(filter(weekly_data, Name2 == "Powell St."), aes(x=ymd,y=sum,group=Name2)) + geom_line(aes(color=sum), size=.5) + scale_color_gradientn(name="",colors=rev(viridis::viridis(5))) + 
+theme_fivethirtyeight() + theme(axis.text = element_text(size=6))  + 
+labs(title = 'Powell Street Station', subtitle='Count of daily departures') + guides(color=F)
+```
+
+Let's take a closer look at August:
+
+```{r}
+ggplot(filter(weekly_data, Name2 == "Powell St.", month(ymd) == 8), aes(x=ymd,y=sum,group=Name2)) + geom_line(aes(color=sum), size=.5) + scale_color_gradientn(name="",colors=rev(viridis::viridis(5))) + 
+theme_fivethirtyeight() + theme(axis.text = element_text(size=6))  + 
+labs(title = 'Powell Street Station', subtitle='Count of daily departures in August') + guides(color=F)
+```
+
+August 1st, 2016 is a Monday, and the vertical axes denote successive Mondays. The data shows a clear drop in usage during the weekends of August. Clearly, recreational usage of BART is limited at best. 
+
+##Pandering
+
+```{r}
+left_join(bart_2016, stations %>% rename(Destination = Abbreviation), by=c('Destination')) %>% 
+dplyr::group_by(Name2, ymd) %>% dplyr::summarize(count=n(),sum= sum(Throughput)) -> weekly_data_arrivals
+
+ggplot(filter(weekly_data_arrivals, Name2 == "Downtown Berkeley"), aes(x=ymd,y=sum,group=Name2)) + geom_line(aes(color=sum), size=.5) + scale_color_gradientn(name="",colors=rev(viridis::viridis(5))) + 
+theme_fivethirtyeight() + theme(axis.text = element_text(size=6))  + 
+labs(title = 'Downtown Berkeley', subtitle='Count of daily arrivals') + guides(color=F)
+```
+
+The Big Game, the rivalry football match between Stanford and Berkeley was played in Berkeley during November, but usage of the BART was not heightened on that day. However...
+
+```{r}
+ggplot(filter(weekly_data_arrivals, Name2 == "Downtown Berkeley", month(ymd) == "10"), aes(x=ymd,y=sum,group=Name2)) + geom_line(aes(color=sum), size=.5) + scale_color_gradientn(name="",colors=rev(viridis::viridis(5))) + 
+theme_fivethirtyeight() + theme(axis.text = element_text(size=6))  + 
+labs(title = 'Downtown Berkeley', subtitle='Count of daily arrivals') + guides(color=F)
+```
+
+What happened on October 21, 2016? 
+
+##Oakland Coliseum
+
+Below is the yearly usage data for Coliseum station, home of the A's and the Raiders.
+
+```{r}
+ggplot(filter(weekly_data_arrivals, Name2 == "Coliseum/Oakland Airport"), aes(x=ymd,y=sum,group=Name2)) + geom_line(aes(color=sum), size=.5) + scale_color_gradientn(name="",colors=rev(viridis::viridis(5))) + 
+theme_fivethirtyeight() + theme(axis.text = element_text(size=6))  + 
+labs(title = 'Coliseum/Oakland Airport', subtitle='Count of daily arrivals') + guides(color=F)
+```
+
+The peak usage of these stations is much more pronounced than that of the San Francisco stations. These peaks each coincide with A's and Raiders home games, which suggests that people use the BART to get to Coliseum games, unlike with Berkeley football games.
+
+```{r}
+ggplot(filter(weekly_data_arrivals, Name2 == "Coliseum/Oakland Airport", month(ymd) == 8), aes(x=ymd,y=sum,group=Name2)) + geom_line(aes(color=sum), size=.5) + scale_color_gradientn(name="",colors=rev(viridis::viridis(5))) + 
+theme_fivethirtyeight() + theme(axis.text = element_text(size=6))  + 
+labs(title = 'Coliseum/Oakland Airport', subtitle='Count of daily arrivals') + guides(color=F)
+```
+
+Here, we see the month of August's data. The peak represents the Raiders-Titans game that took place on August 27, 2016. We lost.
+
+# Conclusion
+
+BART, as a public transportation system, has done a good job fufilling one of its mandates: taking commuters to and from work. But, there is some evidence to suggest that people do not use BART to attend sporting events other than ones taking place at Oakland, where the Arenas are located walking distance away from the station. An expansion of this project to look at other events, such as concerts and rallies, is necessary to generalize this to a problem about BART ridership to recreational events in general, but based on the data presented above, the barriers to attending sporting events using BART are too high to get vehicles off the road and reduce congestion and gas emissions resulting from them. 
+
+#Sources 
+
+https://www.kaggle.com/jonathanbouchet/bart-transit-system
+
+https://www.rstudio.com/wp-content/uploads/2015/03/ggplot2-cheatsheet.pdf - ggplot2 Cheat Sheet
+
+https://www.kaggle.com/saulfuh/bart-ridership/data - The raw dataset
+
+https://cran.r-project.org/web/packages/viridis/vignettes/intro-to-viridis.html - viridis colorblind gradient
+
+https://www.rdocumentation.org/packages/lubridate/versions/1.7.4 - lubridate documentation
+
+https://cran.r-project.org/web/packages/ggthemes/vignettes/ggthemes.html - ggthemes list
+
+https://www.rdocumentation.org/packages/knitr/versions/1.19/topics/kable - kable documentation
